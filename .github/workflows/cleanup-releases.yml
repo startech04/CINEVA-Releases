@@ -3,6 +3,9 @@ name: Cleanup Old Releases
 on:
   release:
     types: [created]
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
@@ -11,7 +14,7 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     steps:
-      - name: Delete old releases
+      - name: Delete old releases (keep latest + 2 most recent)
         uses: actions/github-script@v7
         with:
           script: |
@@ -20,19 +23,25 @@ jobs:
               repo: context.repo.repo,
               per_page: 100
             });
-            const current = releases.data.find(r => r.tag_name === context.ref.replace('refs/tags/', ''));
-            const old = releases.data.filter(r => r.id !== current.id);
-            for (const release of old) {
+            // Sort by created_at descending
+            const sorted = releases.data.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            // Keep the first 3 (latest + 2 recent), delete the rest
+            const toDelete = sorted.slice(3);
+            for (const release of toDelete) {
               console.log(`Deleting release: ${release.tag_name}`);
               await github.rest.repos.deleteRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 release_id: release.id
               });
-              await github.rest.git.deleteRef({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: `tags/${release.tag_name}`
-              });
+              try {
+                await github.rest.git.deleteRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `tags/${release.tag_name}`
+                });
+              } catch (e) {
+                console.log(`Tag ${release.tag_name} already deleted or not found`);
+              }
             }
-            console.log(`Deleted ${old.length} old release(s)`);
+            console.log(`Kept ${Math.min(sorted.length, 3)} release(s), deleted ${toDelete.length}`);
